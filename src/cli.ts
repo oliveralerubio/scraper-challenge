@@ -41,7 +41,7 @@ export function parseArguments(args: string[]): RunConfig {
     .option("delay-ms", {
       type: "number",
       default: 800,
-      desc: "Pausa entre páginas (ms)",
+      desc: "Pausa entre fases de solicitud (ms)",
     })
     .option("pdf-concurrency", {
       type: "number",

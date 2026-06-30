@@ -75,6 +75,20 @@ export async function runPjScraper(client: HttpClient, config: RunConfig): Promi
   let page = 1;
   let pagesScraped = 0;
   let pdfsDownloaded = 0;
+  let shouldApplyDelay = false;
+
+  const withDelay = async <T>(label: string, request: () => Promise<T>): Promise<T> => {
+    if (shouldApplyDelay && config.delayMs > 0) {
+      if (config.verbose) {
+        logger.log("PJ request delay", label, `${config.delayMs}ms`);
+      }
+      await sleep(config.delayMs);
+    }
+    const value = await request();
+    shouldApplyDelay = true;
+    return value;
+  };
+
   let currentAction: JsfPostback = {
     method: "get",
     url: config.baseUrl,
@@ -93,10 +107,11 @@ export async function runPjScraper(client: HttpClient, config: RunConfig): Promi
     let html: string;
     let actualUrl = currentAction.url;
     try {
-      const response =
+      const response = await withDelay("page request", () =>
         currentAction.method === "post"
-          ? await client.postText(currentAction.url, currentAction.data || {}, config.timeoutMs)
-          : await client.getText(currentAction.url, config.timeoutMs);
+          ? client.postText(currentAction.url, currentAction.data || {}, config.timeoutMs)
+          : client.getText(currentAction.url, config.timeoutMs),
+      );
 
       if (response.status === 429) {
         logger.warn("Recibió 429 y agotó reintentos", currentAction.url);
@@ -175,18 +190,20 @@ export async function runPjScraper(client: HttpClient, config: RunConfig): Promi
         for (const pdfUrl of uniquePdfLinks) {
           downloadJobs.push(
             limit(async () => {
-              const savedPath = await downloadPdf(
-                client,
-                {
-                  sourceUrl: pdfUrl,
-                  title: sanitizeRecordTitle(record.title, page, records.length),
-                  baseUrl: actualUrl,
-                  outDir: pdfDir,
-                  page,
-                  index: idx,
-                },
-                config.timeoutMs,
-                config.verbose,
+              const savedPath = await withDelay("PDF download", () =>
+                downloadPdf(
+                  client,
+                  {
+                    sourceUrl: pdfUrl,
+                    title: sanitizeRecordTitle(record.title, page, records.length),
+                    baseUrl: actualUrl,
+                    outDir: pdfDir,
+                    page,
+                    index: idx,
+                  },
+                  config.timeoutMs,
+                  config.verbose,
+                ),
               );
               if (savedPath) {
                 pdfsDownloaded += 1;
@@ -221,9 +238,6 @@ export async function runPjScraper(client: HttpClient, config: RunConfig): Promi
     }
 
     page += 1;
-    if (config.delayMs > 0) {
-      await sleep(config.delayMs);
-    }
   }
 
   await Promise.all(downloadJobs);

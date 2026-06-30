@@ -71,7 +71,7 @@ La evidencia detallada para evaluadores esta documentada en
 - `--max-pages` máximo de páginas a recorrer
 - `--max-docs` máximo de documentos guardados
 - `--download-pdfs` descargar PDFs vinculados
-- `--delay-ms` pausa entre páginas
+- `--delay-ms` pausa entre fases clave de request (GET/POST/PDF)
 - `--pdf-concurrency` concurrencia de descargas PDF
 - `--timeout-ms` timeout HTTP por request
 - `--verbose` logs de detalle

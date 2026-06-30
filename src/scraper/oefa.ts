@@ -124,14 +124,28 @@ export async function runOefaScraper(client: HttpClient, config: RunConfig): Pro
   let page = 1;
   let pagesScraped = 0;
   let pdfsDownloaded = 0;
+  let shouldApplyDelay = false;
+
+  const withDelay = async <T>(label: string, request: () => Promise<T>): Promise<T> => {
+    if (shouldApplyDelay && config.delayMs > 0) {
+      if (config.verbose) {
+        logger.log("OEFA request delay", label, `${config.delayMs}ms`);
+      }
+      await sleep(config.delayMs);
+    }
+    const value = await request();
+    shouldApplyDelay = true;
+    return value;
+  };
 
   let searchUrl = config.baseUrl;
   let formStates: JsfFormState[] = [];
   let formState: JsfFormState | undefined;
   let currentTableHtml = "";
+  let activeFormAction = "";
 
   try {
-    const response = await client.getText(searchUrl, config.timeoutMs);
+    const response = await withDelay("initial GET", () => client.getText(searchUrl, config.timeoutMs));
     if (response.status >= 400) {
       failures.push({
         source: config.target,
@@ -151,12 +165,15 @@ export async function runOefaScraper(client: HttpClient, config: RunConfig): Pro
     if (!formState) {
       throw new Error("No se detectó formulario JSF en OEFA");
     }
+    activeFormAction = formState.action;
 
     const payload = buildBlankSearchPayload(formState);
     if (config.verbose) {
       logger.log("OEFA POST payload keys", Object.keys(payload).length);
     }
-    const searchResponse = await client.postText(formState.action, payload, config.timeoutMs);
+    const searchResponse = await withDelay("initial search POST", () =>
+      client.postText(activeFormAction, payload, config.timeoutMs),
+    );
     if (config.verbose) {
       logger.log("OEFA post status", searchResponse.status, "content-type", searchResponse.headers["content-type"]);
     }
@@ -165,7 +182,7 @@ export async function runOefaScraper(client: HttpClient, config: RunConfig): Pro
         source: config.target,
         page: 1,
         at: new Date().toISOString(),
-        url: formState.action,
+        url: activeFormAction,
         reason: `HTTP ${searchResponse.status}`,
         status: searchResponse.status,
       });
@@ -266,19 +283,21 @@ export async function runOefaScraper(client: HttpClient, config: RunConfig): Pro
         for (const candidate of candidates) {
           downloadJobs.push(
             limit(async () => {
-              const file = await downloadPdf(
-                client,
-                {
-                  sourceUrl: candidate.url,
-                  title: sanitizeRecordTitle(record.title, page, record.index + rowIndex),
-                  baseUrl: url,
-                  outDir: pdfDir,
-                  page,
-                  index: record.index + rowIndex,
-                  postback: candidate.method === "post" ? candidate : undefined,
-                },
-                config.timeoutMs,
-                config.verbose,
+              const file = await withDelay("PDF download", () =>
+                downloadPdf(
+                  client,
+                  {
+                    sourceUrl: candidate.url,
+                    title: sanitizeRecordTitle(record.title, page, record.index + rowIndex),
+                    baseUrl: url,
+                    outDir: pdfDir,
+                    page,
+                    index: record.index + rowIndex,
+                    postback: candidate.method === "post" ? candidate : undefined,
+                  },
+                  config.timeoutMs,
+                  config.verbose,
+                ),
               );
               if (file) {
                 pdfsDownloaded += 1;
@@ -301,7 +320,9 @@ export async function runOefaScraper(client: HttpClient, config: RunConfig): Pro
 
     try {
       const payload = buildPaginationPayload(formState, page * OEFA_PAGE_SIZE);
-      const paginationResponse = await client.postText(formState.action, payload, config.timeoutMs);
+      const paginationResponse = await withDelay("pagination POST", () =>
+        client.postText(activeFormAction, payload, config.timeoutMs),
+      );
       if (paginationResponse.status >= 400) {
         failures.push({
           source: config.target,
@@ -324,15 +345,12 @@ export async function runOefaScraper(client: HttpClient, config: RunConfig): Pro
       currentTableHtml = nextHtml;
       pagesScraped += 1;
       page += 1;
-      if (config.delayMs > 0) {
-        await sleep(config.delayMs);
-      }
     } catch (error) {
       failures.push({
         source: config.target,
         page: page + 1,
         at: new Date().toISOString(),
-        url: formState?.action,
+        url: activeFormAction,
         reason: (error as Error).message || "error-paginación",
       });
       break;
